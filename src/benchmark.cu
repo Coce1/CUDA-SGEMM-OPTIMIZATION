@@ -3,6 +3,7 @@
 #include <chrono>
 #include <random>
 #include <iomanip>
+#include <cublas_v2.h>
 #include "../include/sgemm.cuh"
 
 int main() {
@@ -78,6 +79,48 @@ int main() {
     
     std::cout << "- Time: " << sec_opt << " s | " << tflops_opt << " TFLOPS" << std::endl;
     std::cout << "- Speedup vs Naive: " << (sec_naive / sec_opt) << "x" << std::endl;
+
+    // 3. Ultimate Benchmark: cuBLAS (NVIDIA Official)
+    std::cout << "\n[GPU] Version 3: cuBLAS (Proprietary Optimized)..." << std::endl;
+    
+    // Create the cuBLAS context handle
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
+    // Scalars for the equation C = alpha * (A * B) + beta * C
+    float alpha = 1.0f;
+    float beta = 0.0f;
+
+    // Reset destination memory to ensure a fair test
+    cudaMemset(d_C, 0, bytes);
+
+    cudaEventRecord(start_gpu);
+    
+    // Note: cuBLAS expects Column-Major matrices. 
+    // Passing B then A computes (B^T * A^T)^T = A * B in Row-Major format.
+    cublasSgemm(handle, 
+                CUBLAS_OP_N, CUBLAS_OP_N, 
+                N, N, N, 
+                &alpha, 
+                d_B, N, 
+                d_A, N, 
+                &beta, 
+                d_C, N);
+
+    cudaEventRecord(stop_gpu);
+    cudaEventSynchronize(stop_gpu);
+
+    float ms_cublas = 0;
+    cudaEventElapsedTime(&ms_cublas, start_gpu, stop_gpu);
+    double sec_cublas = ms_cublas / 1000.0;
+    double tflops_cublas = (flops / sec_cublas) / 1e12; 
+
+    std::cout << "- Time: " << sec_cublas << " s | " << tflops_cublas << " TFLOPS" << std::endl;
+    std::cout << "- Speedup vs Naive: " << (sec_naive / sec_cublas) << "x" << std::endl;
+    std::cout << "- Speedup vs Shared: " << (sec_opt / sec_cublas) << "x" << std::endl;
+
+    // Destroy the context handle to free memory
+    cublasDestroy(handle);
 
     cudaMemcpy(h_C_gpu.data(), d_C, bytes, cudaMemcpyDeviceToHost);
 
