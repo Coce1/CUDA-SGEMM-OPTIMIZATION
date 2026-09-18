@@ -68,7 +68,7 @@ int main() {
 
     cudaEventRecord(start_gpu);
     // Ensure the function name matches the one defined in sgemm_shared.cu
-    MatrixMulOptimized<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, N);
+    sgemmGPUShared<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, N);
     cudaEventRecord(stop_gpu);
     cudaEventSynchronize(stop_gpu);
 
