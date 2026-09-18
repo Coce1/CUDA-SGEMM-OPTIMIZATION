@@ -41,6 +41,9 @@ cd cuda-sgemm-optimization
 # Compile the project
 make
 
+# Run the extreme benchmark
+./sgemm_benchmark
+
 ```
 
 ## Performance Analysis
@@ -59,5 +62,4 @@ make
 * **The Power of Tiling:** By utilizing a $16 \times 16$ shared memory tile, the optimized kernel reduces global memory reads by a factor of 16. This shifts the bottleneck from memory bandwidth to computational throughput, resulting in a massive **[X.X]x** speedup.
 * **The Assembly Gap:** cuBLAS outperforms our custom shared-memory kernel by a factor of **[Z.Z]x**. This highlights the impact of hardware-specific optimizations (like register-level tuning, loop unrolling, and potentially Tensor Cores) that NVIDIA implements at the assembly level.
 
-# Run the extreme benchmark
-./sgemm_benchmark
+
