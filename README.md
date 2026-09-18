@@ -48,18 +48,19 @@ make
 
 ## Performance Analysis
 
-**Hardware Environment:** Google Colab (GPU: [e.g., NVIDIA Tesla T4])  
-**Matrix Size:** 4096 x 4096 ($N \times N$)  
+**Hardware Environment:** Google Colab (GPU: NVIDIA Tesla T4)
+**Matrix Size:** 4096 x 4096
 
 | Implementation | Execution Time (s) | Performance (TFLOPS) | Speedup (vs Naive) |
 | :--- | :--- | :--- | :--- |
-| **Naive (Global Memory)** | [0.000] | [0.000] | 1.0x |
-| **Optimized (Shared Memory)** | [0.000] | [0.000] | **[X.X]x** |
-| **cuBLAS (NVIDIA Official)** | [0.000] | [0.000] | **[Y.Y]x** |
+| **Naive (Global Memory)** | 0.4351 | 0.3159 | 1.0x |
+| **Optimized (Shared Memory)** | 0.0162 | 8.4961 | 26.9x |
+| **cuBLAS (NVIDIA Official)** | 0.0766 | 1.7946 | 5.7x |
 
 ### Key Takeaways
-* **The Memory Wall:** The naive implementation is strictly memory-bound. Each thread reads directly from the slow global VRAM, starving the CUDA cores of data.
-* **The Power of Tiling:** By utilizing a $16 \times 16$ shared memory tile, the optimized kernel reduces global memory reads by a factor of 16. This shifts the bottleneck from memory bandwidth to computational throughput, resulting in a massive **[X.X]x** speedup.
-* **The Assembly Gap:** cuBLAS outperforms our custom shared-memory kernel by a factor of **[Z.Z]x**. This highlights the impact of hardware-specific optimizations (like register-level tuning, loop unrolling, and potentially Tensor Cores) that NVIDIA implements at the assembly level.
+
+*   **The Memory Wall:** The naive implementation is strictly memory-bound. Each thread reads directly from the slow global VRAM, severely starving the CUDA cores of data and resulting in a baseline performance of 0.3159 TFLOPS.
+*   **The Power of Tiling:** By utilizing a 16x16 shared memory tile, the optimized kernel reduces global memory reads by a factor of 16. This shifts the bottleneck from memory bandwidth to computational throughput, resulting in a massive 26.9x speedup and pushing the hardware to 8.4961 TFLOPS.
+*   **API Profiling & The Cold Start Penalty:** The benchmark reveals a common profiling artifact where the proprietary cuBLAS library appears slower (1.7946 TFLOPS) than the custom shared-memory kernel. This 0.0766s execution time captures the cuBLAS "Cold Start" overhead—the initial API context creation and internal memory allocation on the GPU. A warm-up pass prior to recording `cudaEvent_t` is required to measure its true assembly-optimized asymptotic performance.
 
 
