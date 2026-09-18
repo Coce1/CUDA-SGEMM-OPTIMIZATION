@@ -21,7 +21,7 @@ __global__ void sgemmGPUShared(float* A, float* B, float* C, int N) {
 	for (int i=0;i<TILE; i++){
 		val += s_A[threadIdx.y*TILE + i] * s_B[i*TILE + threadIdx.x];
 	}
-	__syncthreads()
+	__syncthreads();
 	C[row * N + col] = val;
 	
 }
