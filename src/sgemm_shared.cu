@@ -2,7 +2,7 @@
 #define S_TILE 16*16*4
 #define TILE 16	
 
-__global__ void sgemmGPUShared(float* A, float* B, float* C, int N) {
+__global__ void sgemmGPUShared(const float* A, const float* B, float* C, int N) {
 	__shared__ float s_A[S_TILE];
 	__shared__ float s_B[S_TILE];
 
