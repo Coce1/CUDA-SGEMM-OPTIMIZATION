@@ -1,13 +1,21 @@
 #ifndef SGEMM_CUH
 #define SGEMM_CUH
 
-// 1. Référence CPU (Visible par le compilateur C++ standard et nvcc)
+// Interface 100 % hôte : les kernels restent privés à leur fichier .cu.
+// Toutes les matrices sont N x N, row-major. Les pointeurs d_* sont en mémoire GPU.
+// Chaque launcher vérifie sa configuration de lancement (cudaGetLastError) mais
+// ne synchronise pas : l'appelant synchronise (ou chronomètre avec des cudaEvent).
+
+// Référence CPU O(N^3), pour la validation numérique.
 void sgemmCPU(const float* A, const float* B, float* C, int N);
 
-// 2. Kernels GPU (Visibles uniquement par nvcc)
-#ifdef __CUDACC__
-__global__ void sgemmGPUNaive(const float* A, const float* B, float* C, int N);
-__global__ void sgemmGPUShared(const float* A, const float* B, float* C, int N);
-#endif
+// Naïf : 1 thread = 1 élément de C, mémoire globale uniquement.
+void launchSgemmNaive(const float* d_A, const float* d_B, float* d_C, int N);
 
-#endif
+// Tuiles 16x16 en shared memory (1 élément de C par thread).
+void launchSgemmShared(const float* d_A, const float* d_B, float* d_C, int N);
+
+// Tuiles 64x64, register blocking 4x4 par thread (16 accumulateurs).
+void launchSgemmRegBlocked(const float* d_A, const float* d_B, float* d_C, int N);
+
+#endif // SGEMM_CUH
