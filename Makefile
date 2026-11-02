@@ -21,7 +21,7 @@ OBJS = $(patsubst $(SRC_DIR)/%.cu,  $(OBJ_DIR)/%.o, $(SRCS_CU)) \
 # Tout header modifié => recompilation de tous les objets
 HEADERS = $(wildcard $(INC_DIR)/*.cuh)
 sed -i 's/^    /\t/' Makefile
-
+cat -A Makefile | grep -n 'nvcc\|NVCC) ' | head
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
