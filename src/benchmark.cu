@@ -1,134 +1,171 @@
-#include <iostream>
-#include <vector>
-#include <chrono>
-#include <random>
-#include <iomanip>
 #include <cublas_v2.h>
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <random>
+#include <string>
+#include <vector>
+
+#include "../include/cuda_utils.cuh"
 #include "../include/sgemm.cuh"
 
-int main() {
-    // Massive matrix size: 4096 x 4096 (~67 MB per matrix)
-    int N = 4096; 
-    size_t bytes = N * N * sizeof(float);
-    
-    std::cout << "=== SGEMM Benchmark Extreme (" << N << "x" << N << ") ===" << std::endl;
+#define CUBLAS_CHECK(call)                                                     \
+    do {                                                                       \
+        cublasStatus_t cublas_check_st_ = (call);                              \
+        if (cublas_check_st_ != CUBLAS_STATUS_SUCCESS) {                       \
+            std::fflush(stdout);                                               \
+            std::fprintf(stderr, "[CUBLAS ERROR] %s:%d : statut %d (%s)\n",    \
+                         __FILE__, __LINE__, static_cast<int>(cublas_check_st_), #call); \
+            std::exit(EXIT_FAILURE);                                           \
+        }                                                                      \
+    } while (0)
 
-    std::vector<float> h_A(N * N);
-    std::vector<float> h_B(N * N);
-    std::vector<float> h_C_gpu(N * N, 0.0f);
+struct Impl {
+    const char* name;
+    std::function<void(const float*, const float*, float*, int)> fn;
+    int reps; // exécutions chronométrées (le naïf est lent)
+};
 
-    std::mt19937 gen(42); 
+struct Result {
+    std::string name;
+    double ms = 0.0;
+    double tflops = 0.0;
+    double speedup_naive = 0.0;
+    double err = 0.0;
+    bool ok = false;
+};
+
+static void fillRandom(std::vector<float>& v, unsigned seed) {
+    std::mt19937 gen(seed);
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    for (int i = 0; i < N * N; ++i) {
-        h_A[i] = dist(gen);
-        h_B[i] = dist(gen);
+    for (auto& x : v) x = dist(gen);
+}
+
+// Phase 1 : exactitude sur N non multiple de 16/64, comparée à la référence CPU.
+// Un échec est AFFICHÉ mais n'empêche plus la phase de performance.
+static void checkCorrectness(const std::vector<Impl>& impls, int N) {
+    const size_t n = static_cast<size_t>(N) * N;
+    std::vector<float> h_A(n), h_B(n), h_ref(n), h_C;
+    fillRandom(h_A, 1);
+    fillRandom(h_B, 2);
+    sgemmCPU(h_A.data(), h_B.data(), h_ref.data(), N);
+
+    DeviceBuffer<float> d_A(n), d_B(n), d_C(n);
+    d_A.upload(h_A);
+    d_B.upload(h_B);
+
+    std::printf("--- Phase 1 : exactitude (N = %d, référence CPU) ---\n", N);
+    for (const Impl& impl : impls) {
+        CUDA_CHECK(cudaMemset(d_C.get(), 0xFF, n * sizeof(float))); // NaN partout
+        impl.fn(d_A.get(), d_B.get(), d_C.get(), N);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        d_C.download(h_C);
+
+        const double diff = maxRelDiff(h_C, h_ref);
+        std::printf("  %-32s : erreur relative max = %.3e | %s\n",
+                    impl.name, diff, diff < 1e-4 ? "OK" : "ÉCHEC");
+    }
+    std::printf("\n");
+}
+
+int main() {
+    // Sortie non bufferisée : tout ce qui est affiché reste visible même en cas de crash.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
+    const auto t_program = std::chrono::steady_clock::now();
+
+    std::printf("=== SGEMM Benchmark ===\n");
+    printDeviceInfo();
+
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+
+    // cuBLAS est column-major : en passant (B, A) on obtient C = A*B en row-major.
+    auto cublasImpl = [&](const float* A, const float* B, float* C, int N) {
+        const float alpha = 1.0f, beta = 0.0f;
+        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, N, N,
+                                 &alpha, B, N, A, N, &beta, C, N));
+    };
+
+    const std::vector<Impl> impls = {
+        {"Naive (global memory)", launchSgemmNaive, 3},
+        {"Shared 16x16", launchSgemmShared, 10},
+        {"Register blocking 64x64 (4x4)", launchSgemmRegBlocked, 10},
+        {"cuBLAS", cublasImpl, 10},
+    };
+
+    // ------------------------------ Phase 1 ------------------------------
+    checkCorrectness(impls, 500);
+
+    // ------------------------------ Phase 2 ------------------------------
+    const int N = 4096;
+    const size_t n = static_cast<size_t>(N) * N;
+    const double flops = 2.0 * static_cast<double>(N) * N * N;
+    std::printf("--- Phase 2 : performance (N = %d, %.1f GFLOP par produit) ---\n", N, flops / 1e9);
+
+    std::vector<float> h_A(n), h_B(n), h_ref, h_C;
+    fillRandom(h_A, 42);
+    fillRandom(h_B, 43);
+
+    DeviceBuffer<float> d_A(n), d_B(n), d_C(n);
+    d_A.upload(h_A);
+    d_B.upload(h_B);
+
+    // Référence de validation = cuBLAS (la référence CPU en 4096^3 serait trop longue)
+    CUDA_CHECK(cudaMemset(d_C.get(), 0, n * sizeof(float)));
+    cublasImpl(d_A.get(), d_B.get(), d_C.get(), N);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    d_C.download(h_ref);
+
+    std::vector<Result> results;
+    double sec_naive = 0.0;
+
+    for (const Impl& impl : impls) {
+        std::printf("  [en cours] %s ...\n", impl.name);
+
+        // benchmarkMs : 2 warm-up puis moyenne sur impl.reps exécutions (cudaEvent)
+        const float ms = benchmarkMs([] {}, [&] { impl.fn(d_A.get(), d_B.get(), d_C.get(), N); },
+                                     2, impl.reps);
+        const double sec = ms / 1000.0;
+
+        Result r;
+        r.name = impl.name;
+        r.ms = ms;
+        r.tflops = (flops / sec) / 1e12;
+        if (sec_naive == 0.0) sec_naive = sec; // le premier élément est le naïf
+        r.speedup_naive = sec_naive / sec;
+
+        d_C.download(h_C);
+        r.err = maxRelDiff(h_C, h_ref);
+        r.ok = r.err < 1e-3;
+        results.push_back(r);
+
+        std::printf("    -> %.3f ms | %.3f TFLOPS | err vs cuBLAS %.2e | %s\n",
+                    r.ms, r.tflops, r.err, r.ok ? "OK" : "ÉCHEC");
     }
 
-    // Calculate total floating-point operations (N:int to double for limit of integer overflow)
-    double flops = 2.0 * static_cast<double>(N) * N * N;
+    // ------------------------------ Récapitulatif ------------------------------
+    std::printf("\n=== RÉCAPITULATIF SGEMM (N = %d) ===\n", N);
+    std::printf("%-32s | %12s | %10s | %12s | %11s | %s\n",
+                "Implémentation", "Temps (ms)", "TFLOPS", "Speedup/naïf", "Err/cuBLAS", "Statut");
+    std::printf("---------------------------------+--------------+------------+--------------+-------------+-------\n");
+    for (const Result& r : results) {
+        std::printf("%-32s | %12.3f | %10.4f | %11.1fx | %11.2e | %s\n",
+                    r.name.c_str(), r.ms, r.tflops, r.speedup_naive, r.err, r.ok ? "OK" : "ÉCHEC");
+    }
+    if (results.size() == 4) {
+        std::printf("\nShared 16x16 vs cuBLAS : %.2fx plus lent\n", results[1].ms / results[3].ms);
+        std::printf("Reg. blocking vs cuBLAS : %.2fx plus lent\n", results[2].ms / results[3].ms);
+        std::printf("Reg. blocking vs Shared : %.2fx plus rapide\n", results[1].ms / results[2].ms);
+    }
 
-    float *d_A, *d_B, *d_C;
-    cudaMalloc(&d_A, bytes);
-    cudaMalloc(&d_B, bytes);
-    cudaMalloc(&d_C, bytes);
+    CUBLAS_CHECK(cublasDestroy(handle));
 
-    cudaMemcpy(d_A, h_A.data(), bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B.data(), bytes, cudaMemcpyHostToDevice);
-
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((N + threadsPerBlock.x - 1) / threadsPerBlock.x, 
-                   (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
-
-    cudaEvent_t start_gpu, stop_gpu;
-    cudaEventCreate(&start_gpu);
-    cudaEventCreate(&stop_gpu);
-
-    // 1. Naive GPU Benchmark (Global Memory)
-    std::cout << "\n[GPU] Version 1: Naive (Global Memory)..." << std::endl;
-    cudaEventRecord(start_gpu);
-    sgemmGPUNaive<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, N);
-    cudaEventRecord(stop_gpu);
-    cudaEventSynchronize(stop_gpu);
-
-    float ms_naive = 0;
-    cudaEventElapsedTime(&ms_naive, start_gpu, stop_gpu);
-    double sec_naive = ms_naive / 1000.0;
-    
-    // Convert to Tera-FLOPS (1e12) for HPC scale
-    double tflops_naive = (flops / sec_naive) / 1e12; 
-    
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "- Time: " << sec_naive << " s | " << tflops_naive << " TFLOPS" << std::endl;
-
-    // 2. Optimized GPU Benchmark (Shared Memory - Tiling)
-    std::cout << "\n[GPU] Version 2: Optimized (Shared Memory)..." << std::endl;
-    
-    // Reset destination memory to avoid interference
-    cudaMemset(d_C, 0, bytes);
-
-    cudaEventRecord(start_gpu);
-    // Ensure the function name matches the one defined in sgemm_shared.cu
-    sgemmGPUShared<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C, N);
-    cudaEventRecord(stop_gpu);
-    cudaEventSynchronize(stop_gpu);
-
-    float ms_opt = 0;
-    cudaEventElapsedTime(&ms_opt, start_gpu, stop_gpu);
-    double sec_opt = ms_opt / 1000.0;
-    double tflops_opt = (flops / sec_opt) / 1e12; 
-    
-    std::cout << "- Time: " << sec_opt << " s | " << tflops_opt << " TFLOPS" << std::endl;
-    std::cout << "- Speedup vs Naive: " << (sec_naive / sec_opt) << "x" << std::endl;
-
-    // 3. Ultimate Benchmark: cuBLAS (NVIDIA Official)
-    std::cout << "\n[GPU] Version 3: cuBLAS (Proprietary Optimized)..." << std::endl;
-    
-    // Create the cuBLAS context handle
-    cublasHandle_t handle;
-    cublasCreate(&handle);
-
-    // Scalars for the equation C = alpha * (A * B) + beta * C
-    float alpha = 1.0f;
-    float beta = 0.0f;
-
-    // Reset destination memory to ensure a fair test
-    cudaMemset(d_C, 0, bytes);
-
-    cudaEventRecord(start_gpu);
-    
-    // Note: cuBLAS expects Column-Major matrices. 
-    // Passing B then A computes (B^T * A^T)^T = A * B in Row-Major format.
-    cublasSgemm(handle, 
-                CUBLAS_OP_N, CUBLAS_OP_N, 
-                N, N, N, 
-                &alpha, 
-                d_B, N, 
-                d_A, N, 
-                &beta, 
-                d_C, N);
-
-    cudaEventRecord(stop_gpu);
-    cudaEventSynchronize(stop_gpu);
-
-    float ms_cublas = 0;
-    cudaEventElapsedTime(&ms_cublas, start_gpu, stop_gpu);
-    double sec_cublas = ms_cublas / 1000.0;
-    double tflops_cublas = (flops / sec_cublas) / 1e12; 
-
-    std::cout << "- Time: " << sec_cublas << " s | " << tflops_cublas << " TFLOPS" << std::endl;
-    std::cout << "- Speedup vs Naive: " << (sec_naive / sec_cublas) << "x" << std::endl;
-    std::cout << "- Speedup vs Shared: " << (sec_opt / sec_cublas) << "x" << std::endl;
-
-    // Destroy the context handle to free memory
-    cublasDestroy(handle);
-
-    cudaMemcpy(h_C_gpu.data(), d_C, bytes, cudaMemcpyDeviceToHost);
-
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-    cudaEventDestroy(start_gpu);
-    cudaEventDestroy(stop_gpu);
-
+    const double total_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_program).count();
+    std::printf("\nTemps total d'exécution du programme : %.2f s\n", total_s);
+    std::printf("Benchmark terminé.\n");
     return 0;
 }
