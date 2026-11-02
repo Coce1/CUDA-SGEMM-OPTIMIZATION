@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+git add -A
+git status          # vérifier qu'aucun binaire ni obj/ n'apparaît
+git commit -m "Rewrite: CUDA_CHECK, RAII, warm-up benchmark, validation"
+git push
