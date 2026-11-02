@@ -1,3 +1,6 @@
+# Les commandes commencent par '>' au lieu d'une tabulation (robuste au copier-coller)
+.RECIPEPREFIX = >
+
 NVCC ?= nvcc
 
 # Architecture GPU : sm_75 = T4. Surcharger : make ARCH=sm_86
@@ -20,23 +23,22 @@ OBJS = $(patsubst $(SRC_DIR)/%.cu,  $(OBJ_DIR)/%.o, $(SRCS_CU)) \
 
 # Tout header modifié => recompilation de tous les objets
 HEADERS = $(wildcard $(INC_DIR)/*.cuh)
-sed -i 's/^    /\t/' Makefile
-cat -A Makefile | grep -n 'nvcc\|NVCC) ' | head
+
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(NVCC) $(NVCCFLAGS) $^ -o $@ $(LDFLAGS)
+> $(NVCC) $(NVCCFLAGS) $^ -o $@ $(LDFLAGS)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS) | $(OBJ_DIR)
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+> $(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS) | $(OBJ_DIR)
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+> $(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 $(OBJ_DIR):
-	mkdir -p $@
+> mkdir -p $@
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET)
+> rm -rf $(OBJ_DIR) $(TARGET)
 
 .PHONY: all clean
