@@ -124,6 +124,9 @@ int main() {
 
     for (const Impl& impl : impls) {
         std::printf("  [en cours] %s ...\n", impl.name);
+        // NaN partout avant chaque implémentation : si un kernel n'écrit pas C, la
+        // validation le détecte (sinon d_C garderait le résultat de l'impl. précédente).
+        CUDA_CHECK(cudaMemset(d_C.get(), 0xFF, n * sizeof(float)));
 
         // benchmarkMs : 2 warm-up puis moyenne sur impl.reps exécutions (cudaEvent)
         const float ms = benchmarkMs([] {}, [&] { impl.fn(d_A.get(), d_B.get(), d_C.get(), N); },
