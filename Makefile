@@ -1,15 +1,41 @@
-NVCC = nvcc
-NVCCFLAGS = -O3 -std=c++17 -Iinclude -Wno-deprecated-gpu-targets
-LDFLAGS = -lcublas
+NVCC ?= nvcc
+
+# Architecture GPU : sm_75 = T4. Surcharger : make ARCH=sm_86
+ARCH ?= sm_75
+
+NVCCFLAGS = -O3 -std=c++17 -arch=$(ARCH) -lineinfo -Iinclude -Wno-deprecated-gpu-targets
+LDFLAGS   = -lcublas
+
+SRC_DIR = src
+INC_DIR = include
+OBJ_DIR = obj
 
 TARGET = sgemm_benchmark
-SRC_DIR = src
 
+SRCS_CU  = $(SRC_DIR)/benchmark.cu $(SRC_DIR)/sgemm_naive.cu $(SRC_DIR)/sgemm_shared.cu
+SRCS_CPP = $(SRC_DIR)/sgemm_cpu.cpp
+
+OBJS = $(patsubst $(SRC_DIR)/%.cu,  $(OBJ_DIR)/%.o, $(SRCS_CU)) \
+       $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SRCS_CPP))
+
+# Tout header modifié => recompilation de tous les objets
+HEADERS = $(wildcard $(INC_DIR)/*.cuh)
+sed -i 's/^    /\t/' Makefile
 all: $(TARGET)
 
-# Ensure all your .cu and .cpp files are listed here
-$(TARGET): $(SRC_DIR)/benchmark.cu $(SRC_DIR)/sgemm_cpu.cpp $(SRC_DIR)/sgemm_naive.cu $(SRC_DIR)/sgemm_shared.cu
+$(TARGET): $(OBJS)
 	$(NVCC) $(NVCCFLAGS) $^ -o $@ $(LDFLAGS)
 
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu $(HEADERS) | $(OBJ_DIR)
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS) | $(OBJ_DIR)
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(OBJ_DIR):
+	mkdir -p $@
+
 clean:
-	rm -f $(TARGET)
+	rm -rf $(OBJ_DIR) $(TARGET)
+
+.PHONY: all clean
